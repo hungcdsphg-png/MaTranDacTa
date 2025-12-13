@@ -1,152 +1,180 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
+
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
+
 from docx import Document
-import pdfplumber
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+
 
 # =========================
 # CẤU HÌNH
 # =========================
-st.set_page_config(page_title="Tạo ma trận đặc tả", layout="wide")
+st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
 
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
-# =========================
-# HÀM NHẬN DIỆN FILE
-# =========================
-def get_file_type(file):
-    if file.name.endswith(".xlsx"):
-        return "excel"
-    if file.name.endswith(".docx"):
-        return "word"
-    if file.name.endswith(".pdf"):
-        return "pdf"
-    return None
 
 # =========================
-# HÀM ĐỌC FILE
+# HÀM TẠO KHUNG MA TRẬN CHUẨN
 # =========================
-def read_excel(file):
-    return pd.read_excel(file)
+def create_matrix_frame(df_raw):
+    required_cols = ["TT", "Kĩ năng", "Đơn vị kiến thức", "Hình thức", "Biết", "Hiểu", "VD", "Điểm/câu"]
+    for col in required_cols:
+        if col not in df_raw.columns:
+            st.error(f"Thiếu cột bắt buộc: {col}")
+            st.stop()
 
-def read_word(file):
-    doc = Document(file)
-    text = "\n".join([p.text for p in doc.paragraphs])
-    return text
+    df = df_raw.copy()
 
-def read_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-    return text
-
-# =========================
-# TÍNH TỔNG
-# =========================
-def calculate_totals(df):
     df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
     df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
-    return df
+
+    matrix_cols = [
+        "TT", "Kĩ năng", "Đơn vị kiến thức", "Hình thức",
+        "Biết", "Hiểu", "VD",
+        "Tổng số câu", "Tổng điểm"
+    ]
+
+    return df[matrix_cols]
+
 
 # =========================
-# TÁCH ĐỌC / VIẾT
+# TÔ CỘT VÀNG (EXCEL)
 # =========================
-def split_matrix(df):
-    doc = df[df["Kĩ năng"].str.contains("Đọc", case=False, na=False)]
-    viet = df[df["Kĩ năng"].str.contains("Viết", case=False, na=False)]
-    return doc, viet
-
-# =========================
-# TÔ CỘT VÀNG
-# =========================
-def highlight_excel(file_bytes, yellow_cols):
+def highlight_excel(file_bytes):
     wb = load_workbook(file_bytes)
     ws = wb.active
-    headers = {cell.value: cell.column for cell in ws[1]}
+
+    yellow_cols = ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"]
+    header = {cell.value: cell.column for cell in ws[1]}
 
     for col in yellow_cols:
-        if col in headers:
-            idx = headers[col]
-            for r in range(1, ws.max_row + 1):
-                ws.cell(row=r, column=idx).fill = YELLOW_FILL
+        if col in header:
+            idx = header[col]
+            for row in range(1, ws.max_row + 1):
+                ws.cell(row=row, column=idx).fill = YELLOW_FILL
 
     output = BytesIO()
     wb.save(output)
-    return output.getvalue()
+    output.seek(0)
+    return output
+
 
 # =========================
-# GIAO DIỆN STREAMLIT
+# XUẤT WORD
 # =========================
-st.title("📊 TẠO MA TRẬN ĐẶC TẢ ")
+def export_word(df):
+    doc = Document()
+    doc.add_heading("MA TRẬN BẢN ĐẶC TẢ", level=1)
 
-st.markdown("### 1️⃣ Upload dữ liệu (bắt buộc)")
+    table = doc.add_table(rows=1, cols=len(df.columns))
+    for i, col in enumerate(df.columns):
+        table.rows[0].cells[i].text = col
 
-uploaded_file = st.file_uploader(
-    "Upload **1 trong 3 loại file: Excel / Word / PDF**",
-    type=["xlsx", "docx", "pdf"],
-    accept_multiple_files=False
+    for _, row in df.iterrows():
+        cells = table.add_row().cells
+        for i, val in enumerate(row):
+            cells[i].text = str(val)
+
+    output = BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output
+
+
+# =========================
+# XUẤT PDF
+# =========================
+def export_pdf(df):
+    output = BytesIO()
+    pdf = SimpleDocTemplate(output, pagesize=A4)
+
+    data = [df.columns.tolist()] + df.values.tolist()
+    table = Table(data, repeatRows=1)
+
+    table.setStyle(TableStyle([
+        ("GRID", (0,0), (-1,-1), 0.5, colors.black),
+        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+    ]))
+
+    pdf.build([table])
+    output.seek(0)
+    return output
+
+
+# =========================
+# GIAO DIỆN
+# =========================
+st.title("📊 TẠO MA TRẬN BẢN ĐẶC TẢ")
+
+st.markdown("### 1️⃣ Upload dữ liệu (bắt buộc ít nhất 1 file)")
+
+uploaded_files = st.file_uploader(
+    "Upload Excel / Word / PDF",
+    type=["xlsx", "xls", "docx", "pdf"],
+    accept_multiple_files=True
 )
 
-# =========================
-# KIỂM TRA BẮT BUỘC UPLOAD
-# =========================
-if uploaded_file is None:
-    st.warning("⚠️ Bạn phải upload ít nhất **1 file (Excel / Word / PDF)** để tiếp tục.")
+if not uploaded_files:
+    st.warning("⚠️ Bạn phải upload ít nhất 1 file")
     st.stop()
 
-# =========================
-# XỬ LÝ FILE
-# =========================
-file_type = get_file_type(uploaded_file)
+excel_file = None
 
-st.success(f"✅ Đã nhận file: {uploaded_file.name}")
+for f in uploaded_files:
+    if f.name.endswith((".xlsx", ".xls")):
+        excel_file = f
 
-# =========================
-# TRƯỜNG HỢP EXCEL (CHÍNH)
-# =========================
-if file_type == "excel":
-    st.markdown("### 2️⃣ Xử lý dữ liệu từ Excel")
+if excel_file is None:
+    st.error("❌ Bắt buộc phải có FILE EXCEL để xử lý dữ liệu")
+    st.stop()
 
-    df = read_excel(uploaded_file)
-    st.dataframe(df, use_container_width=True)
-
-    required_cols = {"Kĩ năng", "Biết", "Hiểu", "VD", "Điểm/câu"}
-    if not required_cols.issubset(df.columns):
-        st.error("❌ File Excel thiếu cột bắt buộc")
-        st.stop()
-
-    df = calculate_totals(df)
-    df_doc, df_viet = split_matrix(df)
-
-    # Xuất Excel
-    output_all = BytesIO()
-    df.to_excel(output_all, index=False)
-
-    output_doc = BytesIO()
-    df_doc.to_excel(output_doc, index=False)
-
-    output_viet = BytesIO()
-    df_viet.to_excel(output_viet, index=False)
-
-    # Tô cột vàng
-    yellow_cols = ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"]
-    final_all = highlight_excel(BytesIO(output_all.getvalue()), yellow_cols)
-
-    st.markdown("### 3️⃣ Tải kết quả")
-
-    st.download_button(
-        "⬇️ Tải ma trận tổng (Excel)",
-        data=final_all,
-        file_name="ma_tran_tong_hop.xlsx"
-    )
 
 # =========================
-# WORD / PDF CHỈ THAM KHẢO MẪU
+# XỬ LÝ EXCEL
 # =========================
-else:
-    st.info("📘 File Word / PDF chỉ dùng để **tham khảo mẫu**")
-    content = read_word(uploaded_file) if file_type == "word" else read_pdf(uploaded_file)
-    st.text_area("Nội dung trích xuất", content[:3000], height=300)
+df_raw = pd.read_excel(excel_file)
+df_matrix = create_matrix_frame(df_raw)
+
+st.success("✅ Đã tạo ma trận theo file mẫu")
+st.dataframe(df_matrix, use_container_width=True)
+
+
+# =========================
+# XUẤT FILE
+# =========================
+st.markdown("### 2️⃣ Tải kết quả")
+
+# Excel
+excel_out = BytesIO()
+df_matrix.to_excel(excel_out, index=False)
+excel_out.seek(0)
+excel_out = highlight_excel(excel_out)
+
+st.download_button(
+    "⬇️ Tải Excel",
+    excel_out,
+    file_name="ma_tran_dac_ta.xlsx"
+)
+
+# Word
+word_out = export_word(df_matrix)
+st.download_button(
+    "⬇️ Tải Word",
+    word_out,
+    file_name="ma_tran_dac_ta.docx"
+)
+
+# PDF
+pdf_out = export_pdf(df_matrix)
+st.download_button(
+    "⬇️ Tải PDF",
+    pdf_out,
+    file_name="ma_tran_dac_ta.pdf"
+)
