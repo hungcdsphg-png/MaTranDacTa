@@ -1,149 +1,137 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
-from config import TT32_LEVELS
+import io
 
 from docx import Document
-from reportlab.platypus import SimpleDocTemplate, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+import pdfplumber
 
-st.set_page_config(page_title="Tạo ma trận đặc tả TT32", layout="wide")
+st.set_page_config(page_title="Tạo ma trận bản đặc tả", layout="wide")
 
-st.title("Ứng dụng tạo ma trận đặc tả theo Thông tư 32")
-
-# =========================
-# 1. CHỌN MÔN – KHỐI – KÌ
-# =========================
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    subject = st.selectbox("Chọn môn học", list(TT32_LEVELS.keys()))
-
-with col2:
-    grade = st.selectbox("Chọn khối", ["1","2","3","4","5","6","7","8","9","10","11","12"])
-
-with col3:
-    semester = st.selectbox("Chọn học kì", ["Giữa kì I", "Cuối kì I", "Giữa kì II", "Cuối kì II"])
-
-st.divider()
+st.title("Tạo ma trận bản đặc tả")
+st.write("Upload **1 trong 3 file: Excel / Word / PDF** để tạo ma trận")
 
 # =========================
-# 2. UPLOAD FILE (1 Ô DUY NHẤT)
+# 1. UPLOAD FILE
 # =========================
 uploaded_file = st.file_uploader(
-    "Upload 1 file mẫu (Excel / Word / PDF)",
-    type=["xlsx", "docx", "pdf"]
+    "Tải file mẫu (Excel, Word, PDF)",
+    type=["xlsx", "docx", "pdf"],
+    accept_multiple_files=False
 )
 
-if uploaded_file is None:
-    st.warning("⚠️ Bạn phải upload ít nhất 1 file (Excel / Word / PDF)")
+if not uploaded_file:
+    st.warning("Vui lòng upload ít nhất 1 file.")
     st.stop()
 
-file_type = uploaded_file.name.split(".")[-1]
-
-st.success(f"Đã nhận file: {uploaded_file.name}")
+file_name = uploaded_file.name.lower()
 
 # =========================
-# 3. ĐỌC FILE
+# 2. HÀM ĐỌC FILE
 # =========================
-if file_type == "xlsx":
-    df = pd.read_excel(uploaded_file)
+def read_excel(file):
+    return pd.read_excel(file)
 
-elif file_type in ["docx", "pdf"]:
-    st.info("📌 File Word/PDF chỉ dùng làm mẫu tham khảo")
-    df = pd.DataFrame(columns=[
-        "Kĩ năng", "Đơn vị kiến thức", "Biết", "Hiểu", "Vận dụng", "Điểm/câu"
-    ])
+def read_word(file):
+    doc = Document(file)
+    text = []
+    for para in doc.paragraphs:
+        if para.text.strip():
+            text.append(para.text.strip())
+    return "\n".join(text)
 
-# =========================
-# 4. CHUẨN HÓA BIẾT – HIỂU – VD
-# =========================
-for col in ["Biết", "Hiểu", "Vận dụng"]:
-    if col not in df.columns:
-        df[col] = 0
-
-if "Điểm/câu" not in df.columns:
-    df["Điểm/câu"] = 1
-
-df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["Vận dụng"]
-df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
+def read_pdf(file):
+    text = []
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            t = page.extract_text()
+            if t:
+                text.append(t)
+    return "\n".join(text)
 
 # =========================
-# 5. TÁCH ĐỌC HIỂU / VIẾT
+# 3. PHÂN LOẠI FILE
 # =========================
-df_doc = df[df["Kĩ năng"].str.contains("Đọc", na=False)]
-df_viet = df[df["Kĩ năng"].str.contains("Viết", na=False)]
+raw_text = ""
+df_input = None
+
+if file_name.endswith(".xlsx"):
+    df_input = read_excel(uploaded_file)
+    st.success("Đã đọc file Excel")
+
+elif file_name.endswith(".docx"):
+    raw_text = read_word(uploaded_file)
+    st.success("Đã đọc file Word")
+
+elif file_name.endswith(".pdf"):
+    raw_text = read_pdf(uploaded_file)
+    st.success("Đã đọc file PDF")
 
 # =========================
-# 6. HIỂN THỊ
+# 4. TẠO KHUNG MA TRẬN CHUẨN
 # =========================
-st.subheader("Ma trận tổng hợp")
-st.dataframe(df)
+def create_matrix_template():
+    columns = [
+        "TT",
+        "Kĩ năng",
+        "Đơn vị kiến thức",
+        "Mức độ đánh giá",
+        "Biết",
+        "Hiểu",
+        "Vận dụng",
+        "Hình thức",
+        "Số câu",
+        "Số điểm"
+    ]
+    return pd.DataFrame(columns=columns)
 
-st.subheader("Ma trận Đọc hiểu")
-st.dataframe(df_doc)
-
-st.subheader("Ma trận Viết")
-st.dataframe(df_viet)
+df_matrix = create_matrix_template()
 
 # =========================
-# 7. XUẤT FILE
+# 5. SINH DỮ LIỆU (RULE + AI HOÁ DẦN)
 # =========================
-def export_excel(dataframe):
-    output = BytesIO()
-    dataframe.to_excel(output, index=False)
-    return output.getvalue()
+if df_input is not None:
+    # Trường hợp Excel: lấy dữ liệu trực tiếp
+    df_matrix = df_input.copy()
 
-def export_word(dataframe):
-    doc = Document()
-    doc.add_heading("Ma trận đặc tả", level=1)
-    table = doc.add_table(rows=1, cols=len(dataframe.columns))
-    for i, col in enumerate(dataframe.columns):
-        table.rows[0].cells[i].text = col
+else:
+    # Trường hợp Word / PDF: tạo skeleton từ text
+    lines = raw_text.split("\n")
 
-    for _, row in dataframe.iterrows():
-        cells = table.add_row().cells
-        for i, val in enumerate(row):
-            cells[i].text = str(val)
+    rows = []
+    tt = 1
+    for line in lines:
+        if len(line) > 20:
+            rows.append({
+                "TT": tt,
+                "Kĩ năng": "Đọc hiểu",
+                "Đơn vị kiến thức": line[:60],
+                "Mức độ đánh giá": "Hiểu nội dung",
+                "Biết": 1,
+                "Hiểu": 0,
+                "Vận dụng": 0,
+                "Hình thức": "TN",
+                "Số câu": 1,
+                "Số điểm": 0.25
+            })
+            tt += 1
+        if tt > 5:
+            break
 
-    output = BytesIO()
-    doc.save(output)
-    return output.getvalue()
+    df_matrix = pd.DataFrame(rows)
 
-def export_pdf(dataframe):
-    output = BytesIO()
-    styles = getSampleStyleSheet()
-    doc = SimpleDocTemplate(output)
-    elements = [Paragraph("Ma trận đặc tả", styles["Title"])]
+# =========================
+# 6. HIỂN THỊ & TẢI VỀ
+# =========================
+st.subheader("Ma trận bản đặc tả (có thể chỉnh sửa)")
+edited_df = st.data_editor(df_matrix, num_rows="dynamic")
 
-    for _, row in dataframe.iterrows():
-        elements.append(Paragraph(str(list(row)), styles["Normal"]))
+output = io.BytesIO()
+edited_df.to_excel(output, index=False)
+output.seek(0)
 
-    doc.build(elements)
-    return output.getvalue()
-
-st.divider()
-st.subheader("Tải kết quả")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.download_button(
-        "⬇️ Excel",
-        export_excel(df),
-        file_name="ma_tran.xlsx"
-    )
-
-with col2:
-    st.download_button(
-        "⬇️ Word",
-        export_word(df),
-        file_name="ma_tran.docx"
-    )
-
-with col3:
-    st.download_button(
-        "⬇️ PDF",
-        export_pdf(df),
-        file_name="ma_tran.pdf"
-    )
+st.download_button(
+    "Tải ma trận Excel",
+    data=output,
+    file_name="ma_tran_ban_dac_ta.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
