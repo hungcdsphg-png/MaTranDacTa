@@ -3,4 +3,5 @@ pandas
 openpyxl
 python-docx
 pdfplumber
-reportlab
+pillow
+pytesseract
