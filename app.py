@@ -80,7 +80,7 @@ def highlight_excel(file_bytes, yellow_cols):
 # =========================
 # GIAO DIỆN STREAMLIT
 # =========================
-st.title("📊 TẠO MA TRẬN ĐẶC TẢ (Excel / Word / PDF)")
+st.title("📊 TẠO MA TRẬN ĐẶC TẢ ")
 
 st.markdown("### 1️⃣ Upload dữ liệu (bắt buộc)")
 
