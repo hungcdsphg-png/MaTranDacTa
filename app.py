@@ -1,82 +1,102 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+from config import TT32_LEVELS
+
 from docx import Document
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 
+st.set_page_config(page_title="Tạo ma trận đặc tả TT32", layout="wide")
 
-st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
+st.title("Ứng dụng tạo ma trận đặc tả theo Thông tư 32")
 
-st.title("Ứng dụng tạo Ma trận bản đặc tả")
-st.caption("Upload Excel / Word / PDF – Xuất Excel / Word / PDF")
+# =========================
+# 1. CHỌN MÔN – KHỐI – KÌ
+# =========================
+col1, col2, col3 = st.columns(3)
 
-# ======================
-# 1. UPLOAD (1 Ô – BẮT BUỘC)
-# ======================
-uploaded_files = st.file_uploader(
-    "Upload file (Excel / Word / PDF)",
-    type=["xlsx", "xls", "docx", "pdf"],
-    accept_multiple_files=True
+with col1:
+    subject = st.selectbox("Chọn môn học", list(TT32_LEVELS.keys()))
+
+with col2:
+    grade = st.selectbox("Chọn khối", ["1","2","3","4","5","6","7","8","9","10","11","12"])
+
+with col3:
+    semester = st.selectbox("Chọn học kì", ["Giữa kì I", "Cuối kì I", "Giữa kì II", "Cuối kì II"])
+
+st.divider()
+
+# =========================
+# 2. UPLOAD FILE (1 Ô DUY NHẤT)
+# =========================
+uploaded_file = st.file_uploader(
+    "Upload 1 file mẫu (Excel / Word / PDF)",
+    type=["xlsx", "docx", "pdf"]
 )
 
-if not uploaded_files:
+if uploaded_file is None:
     st.warning("⚠️ Bạn phải upload ít nhất 1 file (Excel / Word / PDF)")
     st.stop()
 
-# ======================
-# 2. PHÂN LOẠI FILE
-# ======================
-excel_files = [f for f in uploaded_files if f.name.endswith((".xlsx", ".xls"))]
-word_files = [f for f in uploaded_files if f.name.endswith(".docx")]
-pdf_files = [f for f in uploaded_files if f.name.endswith(".pdf")]
+file_type = uploaded_file.name.split(".")[-1]
 
-st.success(
-    f"Đã upload: {len(excel_files)} Excel | {len(word_files)} Word | {len(pdf_files)} PDF"
-)
+st.success(f"Đã nhận file: {uploaded_file.name}")
 
-# ======================
-# 3. XỬ LÝ EXCEL (BẮT BUỘC CÓ ĐỂ TẠO MA TRẬN)
-# ======================
-if not excel_files:
-    st.error("❌ Không có file Excel → Không thể tạo ma trận")
-    st.stop()
+# =========================
+# 3. ĐỌC FILE
+# =========================
+if file_type == "xlsx":
+    df = pd.read_excel(uploaded_file)
 
-df = pd.read_excel(excel_files[0])
+elif file_type in ["docx", "pdf"]:
+    st.info("📌 File Word/PDF chỉ dùng làm mẫu tham khảo")
+    df = pd.DataFrame(columns=[
+        "Kĩ năng", "Đơn vị kiến thức", "Biết", "Hiểu", "Vận dụng", "Điểm/câu"
+    ])
 
-required_cols = ["Biết", "Hiểu", "VD", "Điểm/câu"]
-missing = [c for c in required_cols if c not in df.columns]
+# =========================
+# 4. CHUẨN HÓA BIẾT – HIỂU – VD
+# =========================
+for col in ["Biết", "Hiểu", "Vận dụng"]:
+    if col not in df.columns:
+        df[col] = 0
 
-if missing:
-    st.error(f"❌ File Excel thiếu cột: {', '.join(missing)}")
-    st.stop()
+if "Điểm/câu" not in df.columns:
+    df["Điểm/câu"] = 1
 
-# ======================
-# 4. XỬ LÝ DỮ LIỆU
-# ======================
-df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
+df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["Vận dụng"]
 df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
 
-st.subheader("Xem trước ma trận")
-st.dataframe(df, use_container_width=True)
+# =========================
+# 5. TÁCH ĐỌC HIỂU / VIẾT
+# =========================
+df_doc = df[df["Kĩ năng"].str.contains("Đọc", na=False)]
+df_viet = df[df["Kĩ năng"].str.contains("Viết", na=False)]
 
-# ======================
-# 5. XUẤT EXCEL
-# ======================
+# =========================
+# 6. HIỂN THỊ
+# =========================
+st.subheader("Ma trận tổng hợp")
+st.dataframe(df)
+
+st.subheader("Ma trận Đọc hiểu")
+st.dataframe(df_doc)
+
+st.subheader("Ma trận Viết")
+st.dataframe(df_viet)
+
+# =========================
+# 7. XUẤT FILE
+# =========================
 def export_excel(dataframe):
     output = BytesIO()
     dataframe.to_excel(output, index=False)
     return output.getvalue()
 
-# ======================
-# 6. XUẤT WORD
-# ======================
 def export_word(dataframe):
     doc = Document()
-    doc.add_heading("MA TRẬN BẢN ĐẶC TẢ", level=1)
-
+    doc.add_heading("Ma trận đặc tả", level=1)
     table = doc.add_table(rows=1, cols=len(dataframe.columns))
     for i, col in enumerate(dataframe.columns):
         table.rows[0].cells[i].text = col
@@ -90,51 +110,40 @@ def export_word(dataframe):
     doc.save(output)
     return output.getvalue()
 
-# ======================
-# 7. XUẤT PDF
-# ======================
 def export_pdf(dataframe):
     output = BytesIO()
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(output)
-
-    elements = [Paragraph("MA TRẬN BẢN ĐẶC TẢ", styles["Title"])]
+    elements = [Paragraph("Ma trận đặc tả", styles["Title"])]
 
     for _, row in dataframe.iterrows():
-        elements.append(
-            Paragraph(" | ".join(map(str, row.values)), styles["Normal"])
-        )
+        elements.append(Paragraph(str(list(row)), styles["Normal"]))
 
     doc.build(elements)
     return output.getvalue()
 
-# ======================
-# 8. NÚT TẢI FILE
-# ======================
+st.divider()
 st.subheader("Tải kết quả")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.download_button(
-        "⬇️ Tải Excel",
+        "⬇️ Excel",
         export_excel(df),
-        file_name="ma_tran_dac_ta.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        file_name="ma_tran.xlsx"
     )
 
 with col2:
     st.download_button(
-        "⬇️ Tải Word",
+        "⬇️ Word",
         export_word(df),
-        file_name="ma_tran_dac_ta.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        file_name="ma_tran.docx"
     )
 
 with col3:
     st.download_button(
-        "⬇️ Tải PDF",
+        "⬇️ PDF",
         export_pdf(df),
-        file_name="ma_tran_dac_ta.pdf",
-        mime="application/pdf"
+        file_name="ma_tran.pdf"
     )
