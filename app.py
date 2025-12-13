@@ -2,135 +2,135 @@ import streamlit as st
 import pandas as pd
 import io
 
-# ====== IMPORT XỬ LÝ FILE ======
 from docx import Document
-import fitz  # PyMuPDF
+import pdfplumber
 from PIL import Image
+import pytesseract
 
-
-# ================= UI =================
 st.set_page_config(page_title="Tạo ma trận bản đặc tả", layout="wide")
+
 st.title("Tạo ma trận bản đặc tả")
+st.write("Upload **1 file mẫu** (Excel / Word / PDF) và **1 file nội dung** để AI điền ma trận")
 
-st.info("Bắt buộc tải lên **1 file mẫu (Excel / Word / PDF)**")
+# =========================
+# HÀM ĐỌC FILE MẪU
+# =========================
+def read_template(file):
+    name = file.name.lower()
+
+    if name.endswith(".xlsx"):
+        return pd.read_excel(file)
+
+    if name.endswith(".docx"):
+        doc = Document(file)
+        rows = []
+        for table in doc.tables:
+            for row in table.rows:
+                rows.append([cell.text for cell in row.cells])
+        return pd.DataFrame(rows)
+
+    if name.endswith(".pdf"):
+        text = ""
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+        return pd.DataFrame({"Nội dung": text.split("\n")})
+
+    return None
 
 
-# ================= UPLOAD FILES =================
+# =========================
+# HÀM ĐỌC FILE NỘI DUNG
+# =========================
+def read_content(file):
+    name = file.name.lower()
+
+    if name.endswith(".docx"):
+        doc = Document(file)
+        return "\n".join(p.text for p in doc.paragraphs)
+
+    if name.endswith(".pdf"):
+        text = ""
+        with pdfplumber.open(file) as pdf:
+            for page in pdf.pages:
+                text += page.extract_text() or ""
+        return text
+
+    if name.endswith((".png", ".jpg", ".jpeg")):
+        img = Image.open(file)
+        return pytesseract.image_to_string(img, lang="vie")
+
+    return ""
+
+
+# =========================
+# UPLOAD FILE
+# =========================
+st.subheader("1️⃣ Upload file MA TRẬN MẪU (bắt buộc)")
 template_file = st.file_uploader(
-    "📌 Tải file MA TRẬN MẪU",
+    "Excel / Word / PDF",
     type=["xlsx", "docx", "pdf"],
-    accept_multiple_files=False
+    key="template"
 )
 
-content_files = st.file_uploader(
-    "📌 Tải file NỘI DUNG (Word / PDF / Ảnh – không bắt buộc)",
+st.subheader("2️⃣ Upload file NỘI DUNG để điền (bắt buộc)")
+content_file = st.file_uploader(
+    "Word / PDF / Ảnh",
     type=["docx", "pdf", "png", "jpg", "jpeg"],
-    accept_multiple_files=True
+    key="content"
 )
 
+# =========================
+# XỬ LÝ KHI ĐÃ CÓ FILE
+# =========================
+if template_file and content_file:
 
-# ================= HÀM ĐỌC FILE =================
-def read_excel(file):
-    return pd.read_excel(file)
+    st.success("Đã nhận đủ file – bắt đầu xử lý")
 
+    # ---- Đọc file mẫu
+    df_template = read_template(template_file)
 
-def read_word(file):
-    doc = Document(file)
-    return "\n".join([p.text for p in doc.paragraphs])
-
-
-def read_pdf(file):
-    text = ""
-    with fitz.open(stream=file.read(), filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text()
-    return text
-
-
-def read_image(file):
-    img = Image.open(file)
-    return f"Ảnh kích thước {img.size}"
-
-
-# ================= MAIN LOGIC =================
-if template_file is None:
-    st.warning("⛔ Vui lòng tải lên file mẫu trước")
-    st.stop()
-
-try:
-    # ====== XỬ LÝ FILE MẪU ======
-    suffix = template_file.name.split(".")[-1].lower()
-
-    if suffix == "xlsx":
-        df_template = read_excel(template_file)
-        st.success("Đã đọc file Excel mẫu")
-        st.dataframe(df_template.head())
-
-    elif suffix == "docx":
-        template_text = read_word(template_file)
-        st.success("Đã đọc file Word mẫu")
-        st.text_area("Nội dung mẫu", template_text[:2000])
-
-        # Tạo khung DataFrame mẫu (ví dụ)
-        df_template = pd.DataFrame(columns=[
-            "Kĩ năng", "Đơn vị kiến thức", "Biết", "Hiểu", "Vận dụng", "Điểm"
-        ])
-
-    elif suffix == "pdf":
-        template_text = read_pdf(template_file)
-        st.success("Đã đọc file PDF mẫu")
-        st.text_area("Nội dung mẫu", template_text[:2000])
-
-        df_template = pd.DataFrame(columns=[
-            "Kĩ năng", "Đơn vị kiến thức", "Biết", "Hiểu", "Vận dụng", "Điểm"
-        ])
-
-    else:
-        st.error("Định dạng file mẫu không hợp lệ")
+    if df_template is None:
+        st.error("Không đọc được file mẫu")
         st.stop()
 
-    # ====== XỬ LÝ FILE NỘI DUNG ======
-    extracted_text = ""
+    st.subheader("Khung ma trận từ file mẫu")
+    st.dataframe(df_template, use_container_width=True)
 
-    if content_files:
-        for f in content_files:
-            ext = f.name.split(".")[-1].lower()
-            if ext == "docx":
-                extracted_text += read_word(f)
-            elif ext == "pdf":
-                extracted_text += read_pdf(f)
-            elif ext in ["png", "jpg", "jpeg"]:
-                extracted_text += read_image(f)
+    # ---- Đọc file nội dung
+    raw_content = read_content(content_file)
 
-        st.success("Đã đọc file nội dung bổ sung")
+    if not raw_content.strip():
+        st.error("Không đọc được nội dung file")
+        st.stop()
 
-    # ====== GIẢ LẬP AI ĐIỀN MA TRẬN ======
-    if st.button("⚙️ Tạo ma trận"):
-        df_result = df_template.copy()
+    st.subheader("Nội dung trích xuất (AI mức 1)")
+    st.text_area("Raw content", raw_content[:3000], height=200)
 
-        if len(df_result.columns) > 0:
-            df_result.loc[0] = [
-                "Đọc hiểu",
-                "Văn bản văn học",
-                2,
-                1,
-                1,
-                4
-            ]
+    # =========================
+    # AI MỨC 2 – ĐIỀN NỘI DUNG
+    # (DEMO LOGIC – có thể thay bằng LLM)
+    # =========================
+    filled_df = df_template.copy()
 
-        st.success("Hoàn thành tạo ma trận")
-        st.dataframe(df_result)
+    for col in filled_df.columns:
+        if filled_df[col].isna().all():
+            filled_df[col] = "AI gợi ý từ nội dung"
 
-        # ====== DOWNLOAD ======
-        buffer = io.BytesIO()
-        df_result.to_excel(buffer, index=False)
-        st.download_button(
-            "📥 Tải ma trận Excel",
-            data=buffer.getvalue(),
-            file_name="ma_tran_ban_dac_ta.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    st.subheader("Ma trận sau khi AI điền (mức 2)")
+    st.dataframe(filled_df, use_container_width=True)
 
-except Exception as e:
-    st.error("❌ Có lỗi xảy ra khi xử lý file")
-    st.exception(e)
+    # ---- Tải về Excel
+    output = io.BytesIO()
+    filled_df.to_excel(output, index=False)
+    output.seek(0)
+
+    st.download_button(
+        "⬇️ Tải ma trận Excel",
+        data=output,
+        file_name="ma_tran_ban_dac_ta.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+else:
+    st.info("Vui lòng upload **đủ 2 file** để bắt đầu")
