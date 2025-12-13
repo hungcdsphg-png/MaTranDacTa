@@ -1,107 +1,140 @@
 import streamlit as st
 import pandas as pd
-import io
+from io import BytesIO
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
+from docx import Document
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 
-# ===============================
-# CẤU HÌNH TRANG
-# ===============================
-st.set_page_config(
-    page_title="Tạo ma trận đặc tả",
-    layout="wide"
-)
 
-st.title("ỨNG DỤNG TẠO MA TRẬN ĐẶC TẢ")
-st.write("Upload **Excel / Word / PDF** (bắt buộc ít nhất 1 file)")
+st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
 
-# ===============================
-# PHẦN 1. UPLOAD FILE (1 Ô DUY NHẤT)
-# ===============================
+st.title("Ứng dụng tạo Ma trận bản đặc tả")
+st.caption("Upload Excel / Word / PDF – Xuất Excel / Word / PDF")
+
+# ======================
+# 1. UPLOAD (1 Ô – BẮT BUỘC)
+# ======================
 uploaded_files = st.file_uploader(
-    label="Upload file dữ liệu (Excel / Word / PDF)",
-    type=["xlsx", "docx", "pdf"],
+    "Upload file (Excel / Word / PDF)",
+    type=["xlsx", "xls", "docx", "pdf"],
     accept_multiple_files=True
 )
 
-# ===============================
-# KIỂM TRA ĐIỀU KIỆN BẮT BUỘC
-# ===============================
 if not uploaded_files:
-    st.error("❌ Bạn phải upload ít nhất **1 file** (Excel / Word / PDF) để tiếp tục.")
+    st.warning("⚠️ Bạn phải upload ít nhất 1 file (Excel / Word / PDF)")
     st.stop()
 
-# ===============================
-# PHÂN LOẠI FILE
-# ===============================
-excel_file = None
-word_files = []
-pdf_files = []
+# ======================
+# 2. PHÂN LOẠI FILE
+# ======================
+excel_files = [f for f in uploaded_files if f.name.endswith((".xlsx", ".xls"))]
+word_files = [f for f in uploaded_files if f.name.endswith(".docx")]
+pdf_files = [f for f in uploaded_files if f.name.endswith(".pdf")]
 
-for file in uploaded_files:
-    if file.name.endswith(".xlsx"):
-        excel_file = file
-    elif file.name.endswith(".docx"):
-        word_files.append(file)
-    elif file.name.endswith(".pdf"):
-        pdf_files.append(file)
+st.success(
+    f"Đã upload: {len(excel_files)} Excel | {len(word_files)} Word | {len(pdf_files)} PDF"
+)
 
-# ===============================
-# HIỂN THỊ TRẠNG THÁI UPLOAD
-# ===============================
-st.success("✅ Upload thành công!")
+# ======================
+# 3. XỬ LÝ EXCEL (BẮT BUỘC CÓ ĐỂ TẠO MA TRẬN)
+# ======================
+if not excel_files:
+    st.error("❌ Không có file Excel → Không thể tạo ma trận")
+    st.stop()
+
+df = pd.read_excel(excel_files[0])
+
+required_cols = ["Biết", "Hiểu", "VD", "Điểm/câu"]
+missing = [c for c in required_cols if c not in df.columns]
+
+if missing:
+    st.error(f"❌ File Excel thiếu cột: {', '.join(missing)}")
+    st.stop()
+
+# ======================
+# 4. XỬ LÝ DỮ LIỆU
+# ======================
+df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
+df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
+
+st.subheader("Xem trước ma trận")
+st.dataframe(df, use_container_width=True)
+
+# ======================
+# 5. XUẤT EXCEL
+# ======================
+def export_excel(dataframe):
+    output = BytesIO()
+    dataframe.to_excel(output, index=False)
+    return output.getvalue()
+
+# ======================
+# 6. XUẤT WORD
+# ======================
+def export_word(dataframe):
+    doc = Document()
+    doc.add_heading("MA TRẬN BẢN ĐẶC TẢ", level=1)
+
+    table = doc.add_table(rows=1, cols=len(dataframe.columns))
+    for i, col in enumerate(dataframe.columns):
+        table.rows[0].cells[i].text = col
+
+    for _, row in dataframe.iterrows():
+        cells = table.add_row().cells
+        for i, val in enumerate(row):
+            cells[i].text = str(val)
+
+    output = BytesIO()
+    doc.save(output)
+    return output.getvalue()
+
+# ======================
+# 7. XUẤT PDF
+# ======================
+def export_pdf(dataframe):
+    output = BytesIO()
+    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(output)
+
+    elements = [Paragraph("MA TRẬN BẢN ĐẶC TẢ", styles["Title"])]
+
+    for _, row in dataframe.iterrows():
+        elements.append(
+            Paragraph(" | ".join(map(str, row.values)), styles["Normal"])
+        )
+
+    doc.build(elements)
+    return output.getvalue()
+
+# ======================
+# 8. NÚT TẢI FILE
+# ======================
+st.subheader("Tải kết quả")
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("📊 Excel")
-    if excel_file:
-        st.write(f"✔ {excel_file.name}")
-    else:
-        st.warning("Chưa có file Excel")
+    st.download_button(
+        "⬇️ Tải Excel",
+        export_excel(df),
+        file_name="ma_tran_dac_ta.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 with col2:
-    st.subheader("📄 Word (tham khảo)")
-    if word_files:
-        for f in word_files:
-            st.write(f"✔ {f.name}")
-    else:
-        st.write("Không có")
+    st.download_button(
+        "⬇️ Tải Word",
+        export_word(df),
+        file_name="ma_tran_dac_ta.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
 with col3:
-    st.subheader("📕 PDF (tham khảo)")
-    if pdf_files:
-        for f in pdf_files:
-            st.write(f"✔ {f.name}")
-    else:
-        st.write("Không có")
-
-# ===============================
-# KIỂM TRA CÓ FILE EXCEL HAY CHƯA
-# ===============================
-if excel_file is None:
-    st.warning(
-        "⚠️ Chưa có file Excel.\n\n"
-        "👉 Bạn **vẫn có thể upload Word/PDF để tham khảo**, "
-        "nhưng **không thể tạo ma trận** nếu thiếu Excel."
+    st.download_button(
+        "⬇️ Tải PDF",
+        export_pdf(df),
+        file_name="ma_tran_dac_ta.pdf",
+        mime="application/pdf"
     )
-    st.stop()
-
-# ===============================
-# ĐỌC FILE EXCEL
-# ===============================
-try:
-    df_input = pd.read_excel(excel_file)
-    st.subheader("📑 Dữ liệu Excel đã upload")
-    st.dataframe(df_input, use_container_width=True)
-
-except Exception as e:
-    st.error("❌ Không đọc được file Excel.")
-    st.exception(e)
-    st.stop()
-
-# ===============================
-# NÚT TIẾP TỤC XỬ LÝ
-# ===============================
-st.divider()
-
-if st.button("➡️ Tiếp tục tạo ma trận đặc tả"):
-    st.success("Sẵn sàng sang bước tạo khung ma trận theo file mẫu 🚀")
