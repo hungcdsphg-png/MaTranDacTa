@@ -1,20 +1,14 @@
+import streamlit as st
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
-from config import SUBJECT_LEVEL_MAP
+import io
 
+st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
 
-INPUT_FILE = "input/ma_tran_mau.xlsx"
-OUTPUT_DOC = "output/ma_tran_doc_hieu.xlsx"
-OUTPUT_VIET = "output/ma_tran_viet.xlsx"
-OUTPUT_ALL = "output/ma_tran_tong_hop.xlsx"
-
+st.title("Tạo ma trận bản đặc tả")
 
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-
-
-def read_input(file_path):
-    return pd.read_excel(file_path)
 
 
 def calculate_totals(df):
@@ -29,44 +23,55 @@ def split_matrix(df):
     return df_doc, df_viet
 
 
-def export_excel(df, file_path):
-    df.to_excel(file_path, index=False)
-
-
-def highlight_columns(file_path, col_names):
-    wb = load_workbook(file_path)
+def highlight_excel(buffer, yellow_cols):
+    wb = load_workbook(buffer)
     ws = wb.active
 
     header = {cell.value: cell.column for cell in ws[1]}
 
-    for name in col_names:
-        if name in header:
-            col_idx = header[name]
+    for col in yellow_cols:
+        if col in header:
+            col_idx = header[col]
             for row in range(1, ws.max_row + 1):
                 ws.cell(row=row, column=col_idx).fill = YELLOW_FILL
 
-    wb.save(file_path)
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
 
 
-def main():
-    df = read_input(INPUT_FILE)
-    df = calculate_totals(df)
+uploaded_file = st.file_uploader(
+    "Tải file Excel ma trận mẫu",
+    type=["xlsx"]
+)
 
-    df_doc, df_viet = split_matrix(df)
+if uploaded_file:
+    try:
+        df = pd.read_excel(uploaded_file)
+        df = calculate_totals(df)
 
-    export_excel(df, OUTPUT_DOC)
-    export_excel(df, OUTPUT_VIET)
-    export_excel(df, OUTPUT_ALL)
+        df_doc, df_viet = split_matrix(df)
 
-    # Cột giữ nguyên màu vàng theo file mẫu
-    yellow_cols = ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"]
+        st.subheader("Ma trận tổng hợp")
+        st.dataframe(df)
 
-    highlight_columns(OUTPUT_DOC, yellow_cols)
-    highlight_columns(OUTPUT_VIET, yellow_cols)
-    highlight_columns(OUTPUT_ALL, yellow_cols)
+        def prepare_download(df_out, file_name):
+            buffer = io.BytesIO()
+            df_out.to_excel(buffer, index=False)
+            buffer.seek(0)
+            buffer = highlight_excel(buffer, ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"])
 
-    print("Hoàn thành tạo ma trận đặc tả")
+            st.download_button(
+                label=f"Tải {file_name}",
+                data=buffer,
+                file_name=file_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
+        prepare_download(df, "ma_tran_tong_hop.xlsx")
+        prepare_download(df_doc, "ma_tran_doc_hieu.xlsx")
+        prepare_download(df_viet, "ma_tran_viet.xlsx")
 
-if __name__ == "__main__":
-    main()
+    except Exception as e:
+        st.error(f"Lỗi xử lý file: {e}")
