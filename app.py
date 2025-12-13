@@ -42,8 +42,8 @@ def highlight_excel(buffer, yellow_cols):
 
 
 uploaded_file = st.file_uploader(
-    "Tải file Excel ma trận mẫu",
-    type=["xlsx"]
+    "Tải file Excel, PDF, Word ma trận mẫu",
+    type=["xlsx, PDF, Word"]
 )
 
 if uploaded_file:
