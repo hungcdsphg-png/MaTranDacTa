@@ -1,162 +1,170 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
+import numpy as np
+import pdfplumber
 from docx import Document
-from PyPDF2 import PdfReader
-from PIL import Image
-import pytesseract
+import openai
+import os
 
+# ================== CONFIG ==================
+st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
 
-st.set_page_config(page_title="Ma trận đặc tả AI", layout="wide")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-
-# -------------------------
-# UTILITIES
-# -------------------------
-
-def read_excel(file):
-    return pd.read_excel(file)
+# ================== HÀM ĐỌC FILE ==================
+def read_pdf(file):
+    text = ""
+    with pdfplumber.open(file) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                text += page.extract_text() + "\n"
+    return text
 
 
 def read_word(file):
     doc = Document(file)
-    text = []
-    for p in doc.paragraphs:
-        if p.text.strip():
-            text.append(p.text.strip())
-    return "\n".join(text)
+    return "\n".join([p.text for p in doc.paragraphs])
 
 
-def read_pdf(file):
-    reader = PdfReader(file)
-    text = []
-    for page in reader.pages:
-        t = page.extract_text()
-        if t:
-            text.append(t)
-    return "\n".join(text)
+def read_excel(file):
+    df = pd.read_excel(file)
+    return df.to_string(index=False)
 
 
-def read_image(file):
-    img = Image.open(file)
-    return pytesseract.image_to_string(img, lang="vie+eng")
+# ================== TẠO KHUNG MA TRẬN ==================
+def create_matrix_template():
+    columns = [
+        "TT", "Kĩ năng", "Đơn vị kiến thức", "Mức độ đánh giá",
+        "Số tiết", "Tỉ lệ %", "Số điểm cần đạt"
+    ]
 
+    forms = [
+        "NLC", "ĐS", "NỐI", "ĐIỀN",
+        "TL1", "TL2", "TL3"
+    ]
+    levels = ["Biết", "Hiểu", "VD"]
 
-def extract_text(file, file_type):
-    if file_type == "excel":
-        df = read_excel(file)
-        return df, ""
-    if file_type == "word":
-        return None, read_word(file)
-    if file_type == "pdf":
-        return None, read_pdf(file)
-    if file_type == "image":
-        return None, read_image(file)
+    for f in forms:
+        for l in levels:
+            columns.append(f"{f}_{l}")
 
+    columns += ["Tổng số câu", "Điểm từng bài"]
 
-# -------------------------
-# AI FILL LEVEL 1
-# -------------------------
-
-def ai_fill_level_1(df, content_text):
-    df = df.copy()
-    df["Mức độ đánh giá"] = content_text[:300]
+    df = pd.DataFrame(columns=columns)
     return df
 
 
-# -------------------------
-# AI FILL LEVEL 2 (BIẾT – HIỂU – VD)
-# -------------------------
+# ================== AI ĐIỀN NỘI DUNG ==================
+def ai_fill_matrix(raw_text, df):
+    prompt = f"""
+Bạn là chuyên gia ra đề kiểm tra tiểu học.
 
-def ai_fill_level_2(df):
-    df = df.copy()
-    df["Biết"] = 1
-    df["Hiểu"] = 1
-    df["VD"] = 1
-    df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
-    df["Tổng điểm"] = df["Tổng số câu"] * 0.25
+Dựa vào nội dung sau:
+\"\"\"
+{raw_text[:3000]}
+\"\"\"
+
+Hãy:
+1. Xác định các kĩ năng (Đọc hiểu, Viết...)
+2. Xác định đơn vị kiến thức
+3. Viết nội dung cột "Mức độ đánh giá"
+4. Phân bổ số câu hợp lý vào các cột:
+   NLC, ĐS, NỐI, ĐIỀN, TL1, TL2, TL3
+   theo 3 mức: Biết – Hiểu – Vận dụng
+
+Trả về dạng JSON:
+[
+  {{
+    "TT": 1,
+    "Kĩ năng": "...",
+    "Đơn vị kiến thức": "...",
+    "Mức độ đánh giá": "...",
+    "Số tiết": 13,
+    "Tỉ lệ %": 22,
+    "Số điểm cần đạt": 2.24,
+    "NLC_Biết": 1,
+    "NLC_Hiểu": 1,
+    "NLC_VD": 0,
+    ...
+  }}
+]
+"""
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3
+    )
+
+    data = response.choices[0].message.content
+
+    rows = pd.read_json(data)
+    df = pd.concat([df, rows], ignore_index=True)
     return df
 
 
-# -------------------------
-# STREAMLIT UI
-# -------------------------
+# ================== TÍNH TỰ ĐỘNG ==================
+def auto_calculate(df):
+    question_cols = [c for c in df.columns if "_" in c]
 
-st.title("AI tạo ma trận đặc tả")
+    df[question_cols] = df[question_cols].fillna(0)
 
-st.header("1. Upload file MẪU (Word / Excel / PDF)")
+    df["Tổng số câu"] = df[question_cols].sum(axis=1)
 
-sample_file = st.file_uploader(
-    "Bắt buộc chọn 1 file",
-    type=["xlsx", "docx", "pdf"]
+    # điểm mẫu
+    score_map = {
+        "NLC": 0.25,
+        "ĐS": 0.25,
+        "NỐI": 0.25,
+        "ĐIỀN": 0.25,
+        "TL1": 1.5,
+        "TL2": 2.5,
+        "TL3": 3
+    }
+
+    total_score = []
+    for _, row in df.iterrows():
+        s = 0
+        for k, v in score_map.items():
+            for lv in ["Biết", "Hiểu", "VD"]:
+                col = f"{k}_{lv}"
+                if col in df.columns:
+                    s += row[col] * v
+        total_score.append(round(s, 2))
+
+    df["Điểm từng bài"] = total_score
+    return df
+
+
+# ================== GIAO DIỆN ==================
+st.title("📊 TẠO MA TRẬN BẢN ĐẶC TẢ TỰ ĐỘNG")
+
+uploaded_file = st.file_uploader(
+    "📂 Upload file mẫu (PDF / Word / Excel)",
+    type=["pdf", "docx", "xlsx"]
 )
 
-st.header("2. Upload file NỘI DUNG (Word / PDF / Ảnh – không bắt buộc)")
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        raw_text = read_pdf(uploaded_file)
+    elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        raw_text = read_word(uploaded_file)
+    else:
+        raw_text = read_excel(uploaded_file)
 
-content_file = st.file_uploader(
-    "File để AI điền nội dung",
-    type=["docx", "pdf", "png", "jpg", "jpeg"]
-)
+    st.subheader("📄 Nội dung trích xuất")
+    st.text_area("", raw_text, height=200)
 
-if sample_file:
-    try:
-        file_name = sample_file.name.lower()
+    if st.button("🤖 Tạo ma trận bằng AI"):
+        df = create_matrix_template()
+        df = ai_fill_matrix(raw_text, df)
+        df = auto_calculate(df)
 
-        if file_name.endswith(".xlsx"):
-            df_sample = read_excel(sample_file)
-            content_text = ""
+        st.subheader("📋 MA TRẬN ĐẶC TẢ")
+        st.dataframe(df, use_container_width=True)
 
-        elif file_name.endswith(".docx"):
-            df_sample = pd.DataFrame({
-                "Kĩ năng": ["Đọc hiểu", "Viết"],
-                "Đơn vị kiến thức": ["Văn bản", "Tập làm văn"]
-            })
-            content_text = read_word(sample_file)
-
-        elif file_name.endswith(".pdf"):
-            df_sample = pd.DataFrame({
-                "Kĩ năng": ["Đọc hiểu", "Viết"],
-                "Đơn vị kiến thức": ["Văn bản", "Tập làm văn"]
-            })
-            content_text = read_pdf(sample_file)
-
-        else:
-            st.error("File mẫu không hợp lệ")
-            st.stop()
-
-        if content_file:
-            name = content_file.name.lower()
-            if name.endswith(".docx"):
-                content_text += "\n" + read_word(content_file)
-            elif name.endswith(".pdf"):
-                content_text += "\n" + read_pdf(content_file)
-            else:
-                content_text += "\n" + read_image(content_file)
-
-        st.subheader("Ma trận gốc")
-        st.dataframe(df_sample)
-
-        if st.button("AI điền nội dung – MỨC 1"):
-            df_lv1 = ai_fill_level_1(df_sample, content_text)
-            st.subheader("Kết quả MỨC 1")
-            st.dataframe(df_lv1)
-
-        if st.button("AI điền nội dung – MỨC 2 (Biết – Hiểu – VD)"):
-            df_lv2 = ai_fill_level_2(df_sample)
-            st.subheader("Kết quả MỨC 2")
-            st.dataframe(df_lv2)
-
-            buffer = BytesIO()
-            df_lv2.to_excel(buffer, index=False)
-            buffer.seek(0)
-
-            st.download_button(
-                "Tải ma trận Excel",
-                buffer,
-                file_name="ma_tran_dac_ta.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error("Có lỗi xảy ra")
-        st.code(str(e))
+        st.download_button(
+            "⬇️ Tải Excel",
+            df.to_excel(index=False),
+            file_name="ma_tran_dac_ta.xlsx"
+        )
