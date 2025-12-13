@@ -1,123 +1,130 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
+
 from docx import Document
 from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 
+
 st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
+st.title("Ứng dụng tạo Ma trận bản đặc tả")
 
-YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+# ======================
+# UPLOAD FILES
+# ======================
+st.header("1. Upload dữ liệu")
 
+excel_file = st.file_uploader("Upload file Excel (bắt buộc)", type=["xlsx"])
+word_file = st.file_uploader("Upload file Word (tham khảo)", type=["docx"])
+pdf_file = st.file_uploader("Upload file PDF (tham khảo)", type=["pdf"])
 
-# ----------------- CORE FUNCTIONS -----------------
+if excel_file is None:
+    st.warning("Vui lòng upload file Excel")
+    st.stop()
 
-def calculate_totals(df):
-    df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
-    df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
-    return df
+# ======================
+# READ EXCEL
+# ======================
+df = pd.read_excel(excel_file)
 
+required_cols = {"Biết", "Hiểu", "VD", "Điểm/câu", "Kĩ năng"}
+if not required_cols.issubset(df.columns):
+    st.error("File Excel thiếu cột bắt buộc")
+    st.stop()
 
-def split_matrix(df):
-    df_doc = df[df["Kĩ năng"].str.contains("Đọc", case=False, na=False)]
-    df_viet = df[df["Kĩ năng"].str.contains("Viết", case=False, na=False)]
-    return df_doc, df_viet
+# ======================
+# PROCESS
+# ======================
+df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
+df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
 
+df_doc = df[df["Kĩ năng"].str.contains("Đọc", case=False, na=False)]
+df_viet = df[df["Kĩ năng"].str.contains("Viết", case=False, na=False)]
 
-def export_excel(df):
+st.success("Xử lý dữ liệu thành công")
+
+st.subheader("Xem trước dữ liệu")
+st.dataframe(df)
+
+# ======================
+# EXPORT EXCEL
+# ======================
+def export_excel(dataframe):
     buffer = BytesIO()
-    df.to_excel(buffer, index=False)
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        dataframe.to_excel(writer, index=False)
     buffer.seek(0)
     return buffer
 
-
-def highlight_excel(buffer, yellow_cols):
-    wb = load_workbook(buffer)
-    ws = wb.active
-    header = {cell.value: cell.column for cell in ws[1]}
-
-    for col in yellow_cols:
-        if col in header:
-            idx = header[col]
-            for row in range(1, ws.max_row + 1):
-                ws.cell(row=row, column=idx).fill = YELLOW_FILL
-
-    out = BytesIO()
-    wb.save(out)
-    out.seek(0)
-    return out
-
-
-def export_word(df):
+# ======================
+# EXPORT WORD
+# ======================
+def export_word(dataframe):
     doc = Document()
     doc.add_heading("MA TRẬN BẢN ĐẶC TẢ", level=1)
 
-    table = doc.add_table(rows=1, cols=len(df.columns))
-    for i, col in enumerate(df.columns):
-        table.rows[0].cells[i].text = str(col)
+    table = doc.add_table(rows=1, cols=len(dataframe.columns))
+    for i, col in enumerate(dataframe.columns):
+        table.rows[0].cells[i].text = col
 
-    for _, row in df.iterrows():
+    for _, row in dataframe.iterrows():
         cells = table.add_row().cells
-        for i, val in enumerate(row):
-            cells[i].text = str(val)
+        for i, value in enumerate(row):
+            cells[i].text = str(value)
 
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-
-def export_pdf(df):
+# ======================
+# EXPORT PDF
+# ======================
+def export_pdf(dataframe):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer)
     styles = getSampleStyleSheet()
-    elements = [Paragraph("MA TRẬN BẢN ĐẶC TẢ", styles["Title"])]
+    content = []
 
-    for _, row in df.iterrows():
-        text = " | ".join(str(v) for v in row.values)
-        elements.append(Paragraph(text, styles["Normal"]))
+    content.append(Paragraph("MA TRẬN BẢN ĐẶC TẢ", styles["Title"]))
 
-    doc.build(elements)
+    for _, row in dataframe.iterrows():
+        text = " | ".join([str(v) for v in row])
+        content.append(Paragraph(text, styles["Normal"]))
+
+    pdf = SimpleDocTemplate(buffer)
+    pdf.build(content)
+
     buffer.seek(0)
     return buffer
 
+# ======================
+# DOWNLOAD
+# ======================
+st.header("2. Tải kết quả")
 
-# ----------------- STREAMLIT UI -----------------
+col1, col2, col3 = st.columns(3)
 
-st.title("📊 TẠO MA TRẬN ĐẶC TẢ (Excel / Word / PDF)")
+with col1:
+    st.download_button(
+        "Tải Excel",
+        export_excel(df),
+        file_name="ma_tran_dac_ta.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-st.markdown("### 1️⃣ Upload dữ liệu")
-excel_file = st.file_uploader("Upload file Excel (bắt buộc)", type=["xlsx"])
-word_file = st.file_uploader("Upload file Word (tham khảo)", type=["docx"])
-pdf_file = st.file_uploader("Upload file PDF (tham khảo)", type=["pdf"])
+with col2:
+    st.download_button(
+        "Tải Word",
+        export_word(df),
+        file_name="ma_tran_dac_ta.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
-if excel_file:
-    df = pd.read_excel(excel_file)
-    df = calculate_totals(df)
-
-    st.success("Đã đọc dữ liệu Excel")
-
-    df_doc, df_viet = split_matrix(df)
-
-    st.markdown("### 2️⃣ Xem trước dữ liệu")
-    st.dataframe(df)
-
-    yellow_cols = ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"]
-
-    st.markdown("### 3️⃣ Tải kết quả")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        excel_out = highlight_excel(export_excel(df), yellow_cols)
-        st.download_button("⬇️ Excel", excel_out, "ma_tran.xlsx")
-
-    with col2:
-        word_out = export_word(df)
-        st.download_button("⬇️ Word", word_out, "ma_tran.docx")
-
-    with col3:
-        pdf_out = export_pdf(df)
-        st.download_button("⬇️ PDF", pdf_out, "ma_tran.pdf")
+with col3:
+    st.download_button(
+        "Tải PDF",
+        export_pdf(df),
+        file_name="ma_tran_dac_ta.pdf",
+        mime="application/pdf"
+    )
