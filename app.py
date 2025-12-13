@@ -1,77 +1,129 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill
-import io
+from io import BytesIO
 
-st.set_page_config(page_title="Ma trận đặc tả", layout="wide")
+from docx import Document
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+from PyPDF2 import PdfReader
+
+st.set_page_config(page_title="Tạo ma trận bản đặc tả", layout="wide")
 
 st.title("Tạo ma trận bản đặc tả")
+st.write("Upload Excel / Word / PDF (PDF & Word dùng để tham khảo mẫu)")
 
-YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-
-
-def calculate_totals(df):
-    df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
-    df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
-    return df
-
-
-def split_matrix(df):
-    df_doc = df[df["Kĩ năng"].str.contains("Đọc", case=False, na=False)]
-    df_viet = df[df["Kĩ năng"].str.contains("Viết", case=False, na=False)]
-    return df_doc, df_viet
-
-
-def highlight_excel(buffer, yellow_cols):
-    wb = load_workbook(buffer)
-    ws = wb.active
-
-    header = {cell.value: cell.column for cell in ws[1]}
-
-    for col in yellow_cols:
-        if col in header:
-            col_idx = header[col]
-            for row in range(1, ws.max_row + 1):
-                ws.cell(row=row, column=col_idx).fill = YELLOW_FILL
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
-
-
+# ======================
+# UPLOAD FILE
+# ======================
 uploaded_file = st.file_uploader(
-    "Tải file Excel, PDF, Word ma trận mẫu",
-    type=["xlsx, PDF, Word"]
+    "Tải file ma trận mẫu",
+    type=["xlsx", "xls", "docx", "pdf"]
 )
 
-if uploaded_file:
-    try:
-        df = pd.read_excel(uploaded_file)
-        df = calculate_totals(df)
+if uploaded_file is None:
+    st.stop()
 
-        df_doc, df_viet = split_matrix(df)
+file_name = uploaded_file.name.lower()
 
-        st.subheader("Ma trận tổng hợp")
-        st.dataframe(df)
+# ======================
+# XỬ LÝ EXCEL (FILE CHÍNH)
+# ======================
+df = None
 
-        def prepare_download(df_out, file_name):
-            buffer = io.BytesIO()
-            df_out.to_excel(buffer, index=False)
-            buffer.seek(0)
-            buffer = highlight_excel(buffer, ["Kĩ năng", "Đơn vị kiến thức", "Hình thức"])
+if file_name.endswith((".xlsx", ".xls")):
+    df = pd.read_excel(uploaded_file)
+    st.success("Đã đọc file Excel")
+    st.dataframe(df)
 
-            st.download_button(
-                label=f"Tải {file_name}",
-                data=buffer,
-                file_name=file_name,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+# ======================
+# WORD – CHỈ ĐỌC THAM KHẢO
+# ======================
+elif file_name.endswith(".docx"):
+    doc = Document(uploaded_file)
+    text = "\n".join(p.text for p in doc.paragraphs)
+    st.info("Nội dung Word (tham khảo)")
+    st.text(text[:3000])
 
-        prepare_download(df, "ma_tran_tong_hop.xlsx")
-        prepare_download(df_doc, "ma_tran_doc_hieu.xlsx")
-        prepare_download(df_viet, "ma_tran_viet.xlsx")
+# ======================
+# PDF – CHỈ ĐỌC THAM KHẢO
+# ======================
+elif file_name.endswith(".pdf"):
+    reader = PdfReader(uploaded_file)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    st.info("Nội dung PDF (tham khảo)")
+    st.text(text[:3000])
 
-    except Exception as e:
-        st.error(f"Lỗi xử lý file: {e}")
+# ======================
+# NẾU CÓ EXCEL → XỬ LÝ
+# ======================
+if df is not None:
+    required_cols = {"Biết", "Hiểu", "VD", "Điểm/câu"}
+
+    if not required_cols.issubset(df.columns):
+        st.error("File Excel thiếu cột: Biết, Hiểu, VD, Điểm/câu")
+        st.stop()
+
+    df["Tổng số câu"] = df["Biết"] + df["Hiểu"] + df["VD"]
+    df["Tổng điểm"] = df["Tổng số câu"] * df["Điểm/câu"]
+
+    st.subheader("Ma trận sau xử lý")
+    st.dataframe(df)
+
+    # ======================
+    # XUẤT EXCEL
+    # ======================
+    excel_buffer = BytesIO()
+    df.to_excel(excel_buffer, index=False)
+
+    st.download_button(
+        "Tải Excel",
+        data=excel_buffer.getvalue(),
+        file_name="ma_tran_dac_ta.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # ======================
+    # XUẤT WORD
+    # ======================
+    doc = Document()
+    doc.add_heading("Ma trận bản đặc tả", level=1)
+
+    table = doc.add_table(rows=1, cols=len(df.columns))
+    for i, col in enumerate(df.columns):
+        table.rows[0].cells[i].text = col
+
+    for _, row in df.iterrows():
+        cells = table.add_row().cells
+        for i, value in enumerate(row):
+            cells[i].text = str(value)
+
+    word_buffer = BytesIO()
+    doc.save(word_buffer)
+
+    st.download_button(
+        "Tải Word",
+        data=word_buffer.getvalue(),
+        file_name="ma_tran_dac_ta.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+    # ======================
+    # XUẤT PDF
+    # ======================
+    pdf_buffer = BytesIO()
+    pdf = SimpleDocTemplate(pdf_buffer)
+    styles = getSampleStyleSheet()
+
+    content = [Paragraph("Ma trận bản đặc tả", styles["Title"])]
+
+    for col in df.columns:
+        content.append(Paragraph(col, styles["Normal"]))
+
+    pdf.build(content)
+
+    st.download_button(
+        "Tải PDF",
+        data=pdf_buffer.getvalue(),
+        file_name="ma_tran_dac_ta.pdf",
+        mime="application/pdf"
+    )
