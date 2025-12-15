@@ -1,5 +1,6 @@
 streamlit
 pandas
-google-generativeai
-xlsxwriter
 openpyxl
+python-dotenv
+google-generativeai
+PyMuPDF
