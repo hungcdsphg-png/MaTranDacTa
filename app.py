@@ -4,31 +4,38 @@ import pdfplumber
 import docx
 import os
 import json
-from io import BytesIO
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# =========================
-# CONFIG
-# =========================
+# =============================
+# STREAMLIT CONFIG
+# =============================
 st.set_page_config(
     page_title="Trợ lý Ma Trận Đặc Tả",
     layout="wide"
 )
 
+# =============================
+# LOAD ENV
+# =============================
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-MODEL_NAME = "gpt-4.1"
+if not OPENAI_API_KEY:
+    st.error("❌ Chưa cấu hình OPENAI_API_KEY trong Secrets")
+    st.stop()
 
-# =========================
-# HELPER: READ FILE
-# =========================
+client = OpenAI(api_key=OPENAI_API_KEY)
+MODEL_NAME = "gpt-4.1"   # Có thể đổi sang gpt-4o-mini để test
+
+# =============================
+# FILE READERS
+# =============================
 def read_pdf(file):
     text = ""
     with pdfplumber.open(file) as pdf:
         for i, page in enumerate(pdf.pages):
-            text += f"\n--- Page {i+1} ---\n"
+            text += f"\n--- Trang {i+1} ---\n"
             text += page.extract_text() or ""
     return text
 
@@ -40,58 +47,27 @@ def read_excel(file):
     df = pd.read_excel(file)
     return df.to_csv(index=False)
 
-from io import BytesIO
+def extract_text(file):
+    name = file.name.lower()
+    if name.endswith(".pdf"):
+        return read_pdf(file)
+    if name.endswith(".docx"):
+        return read_docx(file)
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return read_excel(file)
+    return file.read().decode("utf-8", errors="ignore")
 
-def extract_text(uploaded_file):
-    # Đọc file thành bytes
-    file_bytes = uploaded_file.read()
-    uploaded_file.seek(0)  # reset con trỏ file
-
-    file_name = uploaded_file.name.lower()
-
-    if file_name.endswith(".pdf"):
-        text = ""
-        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                page_text = page.extract_text()
-                if page_text:
-                    text += f"\n--- Trang {i+1} ---\n{page_text}"
-        return text.strip()
-
-    elif file_name.endswith(".docx"):
-        doc = docx.Document(BytesIO(file_bytes))
-        texts = []
-
-        for p in doc.paragraphs:
-            if p.text.strip():
-                texts.append(p.text)
-
-        # Đọc cả bảng trong Word
-        for table in doc.tables:
-            for row in table.rows:
-                texts.append(" | ".join(cell.text for cell in row.cells))
-
-        return "\n".join(texts).strip()
-
-    elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
-        df = pd.read_excel(BytesIO(file_bytes))
-        return df.to_csv(index=False)
-
-    else:
-        return file_bytes.decode("utf-8", errors="ignore").strip()
-
-
-# =========================
+# =============================
 # UI – HEADER
-# =========================
+# =============================
 st.markdown("""
 # 🧠 **TRỢ LÍ MA TRẬN ĐẶC TẢ**
 _Hỗ trợ xây dựng bảng đặc tả đề kiểm tra – chuẩn khảo thí_
 """)
 
-# =========================
+# =============================
 # SECTION 1 – DATA
-# =========================
+# =============================
 st.header("① Dữ liệu tham chiếu")
 
 ref_files = st.file_uploader(
@@ -105,29 +81,22 @@ ref_text = st.text_area(
     height=200
 )
 
-text = extract_text(f)
+reference_contents = []
 
-if not text or len(text) < 50:
-    st.warning(f"⚠️ File {f.name} không trích xuất được nội dung (PDF scan hoặc file rỗng)")
-else:
-    reference_contents.append(
-        f"\n=== FILE: {f.name} ===\n{text}"
-    )
+if ref_files:
+    with st.spinner("Đang đọc file..."):
+        for f in ref_files:
+            try:
+                reference_contents.append(
+                    f"\n=== FILE: {f.name} ===\n{extract_text(f)}"
+                )
+            except Exception as e:
+                st.error(f"Lỗi đọc {f.name}: {e}")
 
-    # DEBUG – xem trước 500 ký tự
-    with st.expander(f"📄 Xem trước nội dung {f.name}"):
-        st.text(text[:500])
-
-# =========================
+# =============================
 # SECTION 2 – TEMPLATE
-# =========================
+# =============================
 st.header("② Khung ma trận mẫu")
-
-template_file = st.file_uploader(
-    "Upload file mẫu",
-    type=["pdf", "docx", "xlsx", "xls", "txt", "csv"],
-    accept_multiple_files=False
-)
 
 default_template = (
     "STT, Nội dung kiến thức, Đơn vị kiến thức, "
@@ -141,13 +110,9 @@ template_text = st.text_area(
     height=150
 )
 
-if template_file:
-    with st.spinner("Đang đọc file mẫu..."):
-        template_text += "\n\n" + extract_text(template_file)
-
-# =========================
+# =============================
 # SECTION 3 – GENERATE
-# =========================
+# =============================
 st.header("③ Tạo ma trận bằng AI")
 
 if st.button("🚀 TẠO MA TRẬN ĐẶC TẢ", use_container_width=True):
@@ -156,21 +121,17 @@ if st.button("🚀 TẠO MA TRẬN ĐẶC TẢ", use_container_width=True):
         st.error("❌ Chưa có dữ liệu tham chiếu")
         st.stop()
 
-    with st.spinner("GPT-4.1 đang phân tích và xây dựng ma trận..."):
+    with st.spinner("GPT-4.1 đang phân tích và tạo ma trận..."):
 
         system_prompt = """
 Bạn là CHUYÊN GIA KHẢO THÍ.
 
-NHIỆM VỤ:
-- Phân tích dữ liệu môn học
-- Tạo BẢNG MA TRẬN ĐẶC TẢ
-
-⚠️ QUY TẮC BẮT BUỘC:
-1. Chỉ trả về JSON
-2. Không markdown
-3. Không giải thích
-4. TẤT CẢ giá trị trong rows PHẢI LÀ STRING
-5. Không number, không null
+QUY TẮC BẮT BUỘC:
+- Chỉ trả về JSON
+- Không markdown
+- Không giải thích
+- TẤT CẢ giá trị trong rows PHẢI LÀ STRING
+- Không number, không null
 """
 
         user_prompt = f"""
@@ -183,39 +144,39 @@ NHIỆM VỤ:
 {"".join(reference_contents)}
 """
 
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "matrix_spec",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "headers": {
-                                "type": "array",
-                                "items": {"type": "string"}
-                            },
-                            "rows": {
-                                "type": "array",
-                                "items": {
+        try:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "matrix_spec",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "headers": {
                                     "type": "array",
                                     "items": {"type": "string"}
+                                },
+                                "rows": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "string"}
+                                    }
                                 }
-                            }
-                        },
-                        "required": ["headers", "rows"]
+                            },
+                            "required": ["headers", "rows"]
+                        }
                     }
-                }
-            },
-            temperature=0.2
-        )
+                },
+                temperature=0.2
+            )
 
-        try:
             result = json.loads(response.choices[0].message.content)
             df = pd.DataFrame(result["rows"], columns=result["headers"])
 
@@ -231,5 +192,5 @@ NHIỆM VỤ:
             )
 
         except Exception as e:
-            st.error("❌ GPT-4.1 trả dữ liệu lỗi")
-            st.code(response.choices[0].message.content)
+            st.error("❌ Lỗi khi gọi GPT-4.1")
+            st.exception(e)
