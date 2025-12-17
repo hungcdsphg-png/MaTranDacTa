@@ -1,2 +1,7 @@
-streamlit>=1.32.0
-openai>=1.12.0
+streamlit
+google-generativeai
+python-dotenv
+pandas
+pdfplumber
+python-docx
+openpyxl
