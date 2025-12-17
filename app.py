@@ -1,20 +1,13 @@
-import streamlit as st
-import os
-from openai import OpenAI
+import google.generativeai as genai
 
-st.title("TEST STREAMLIT + OPENAI")
+st.sidebar.header("🔐 Test Gemini API")
 
-api_key = os.getenv("OPENAI_API_KEY")
-st.write("API key tồn tại:", bool(api_key))
-
-if not api_key:
-    st.stop()
-
-client = OpenAI(api_key=api_key)
-
-if st.button("Test GPT"):
-    res = client.responses.create(
-        model="gpt-4o-mini",
-        input="Nói OK"
-    )
-    st.write(res.output_text)
+if st.sidebar.button("Test Gemini API"):
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        response = model.generate_content("Chỉ trả lời: OK")
+        st.sidebar.success("✅ GEMINI API HOẠT ĐỘNG")
+        st.sidebar.code(response.text)
+    except Exception as e:
+        st.sidebar.error("❌ LỖI GEMINI API")
+        st.sidebar.code(str(e))
