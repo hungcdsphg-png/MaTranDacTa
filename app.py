@@ -17,209 +17,150 @@ st.set_page_config(
 )
 
 # =============================
-# LOAD ENV & OPENAI
+# LOAD ENV
 # =============================
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    st.error("❌ Chưa cấu hình OPENAI_API_KEY trong Streamlit Secrets")
+    st.error("❌ Chưa cấu hình OPENAI_API_KEY trong Secrets")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-MODEL_NAME = "gpt-4.1"  # Có thể đổi sang gpt-4o-mini để test nhanh
+MODEL_NAME = "gpt-4.1"
 
 # =============================
-# FILE EXTRACT (FIX HOÀN TOÀN)
+# FILE EXTRACT
 # =============================
 def extract_text(uploaded_file):
     file_bytes = uploaded_file.read()
-    uploaded_file.seek(0)  # reset con trỏ file
+    uploaded_file.seek(0)
     name = uploaded_file.name.lower()
 
-    # PDF
     if name.endswith(".pdf"):
         text = ""
         with pdfplumber.open(BytesIO(file_bytes)) as pdf:
             for i, page in enumerate(pdf.pages):
-                page_text = page.extract_text()
-                if page_text:
-                    text += f"\n--- Trang {i+1} ---\n{page_text}"
+                t = page.extract_text()
+                if t:
+                    text += f"\n--- Trang {i+1} ---\n{t}"
         return text.strip()
 
-    # WORD
     elif name.endswith(".docx"):
         doc = docx.Document(BytesIO(file_bytes))
-        texts = []
-
-        for p in doc.paragraphs:
-            if p.text.strip():
-                texts.append(p.text)
-
-        # Đọc cả bảng
+        texts = [p.text for p in doc.paragraphs if p.text.strip()]
         for table in doc.tables:
             for row in table.rows:
                 texts.append(" | ".join(cell.text for cell in row.cells))
+        return "\n".join(texts)
 
-        return "\n".join(texts).strip()
-
-    # EXCEL
     elif name.endswith(".xlsx") or name.endswith(".xls"):
         df = pd.read_excel(BytesIO(file_bytes))
         return df.to_csv(index=False)
 
-    # TEXT
     else:
-        return file_bytes.decode("utf-8", errors="ignore").strip()
+        return file_bytes.decode("utf-8", errors="ignore")
 
 # =============================
-# UI – HEADER
+# UI
 # =============================
-st.markdown("""
-# 🧠 **TRỢ LÍ MA TRẬN ĐẶC TẢ**
-_Hỗ trợ xây dựng bảng đặc tả đề kiểm tra – chuẩn khảo thí_
-""")
-
-# =============================
-# SECTION 1 – REFERENCE DATA
-# =============================
-st.header("① Dữ liệu tham chiếu")
+st.title("🧠 TRỢ LÍ MA TRẬN ĐẶC TẢ")
 
 ref_files = st.file_uploader(
-    "Upload tài liệu (PDF / Word / Excel / Text)",
+    "Upload tài liệu tham chiếu",
     type=["pdf", "docx", "xlsx", "xls", "txt", "csv"],
     accept_multiple_files=True
 )
 
-ref_text = st.text_area(
-    "Hoặc dán nội dung trực tiếp",
-    height=200
+ref_text = st.text_area("Hoặc dán nội dung", height=150)
+
+template_text = st.text_area(
+    "Khung ma trận",
+    value="STT, Nội dung kiến thức, Chuẩn đánh giá, Nhận biết, Thông hiểu, Vận dụng, Tổng",
+    height=120
 )
 
 reference_contents = []
-
 if ref_files:
-    with st.spinner("Đang đọc và phân tích file..."):
-        for f in ref_files:
-            try:
-                text = extract_text(f)
-
-                if not text or len(text) < 50:
-                    st.warning(
-                        f"⚠️ File {f.name} không trích xuất được nội dung "
-                        "(PDF scan hoặc file rỗng)"
-                    )
-                else:
-                    reference_contents.append(
-                        f"\n=== FILE: {f.name} ===\n{text}"
-                    )
-
-                    # PREVIEW KIỂM CHỨNG
-                    with st.expander(f"📄 Xem trước nội dung {f.name}"):
-                        st.text(text[:800])
-
-            except Exception as e:
-                st.error(f"❌ Lỗi đọc {f.name}: {e}")
+    for f in ref_files:
+        text = extract_text(f)
+        if text and len(text) > 50:
+            reference_contents.append(f"\n=== FILE: {f.name} ===\n{text}")
+            with st.expander(f"📄 Xem trước {f.name}"):
+                st.text(text[:800])
+        else:
+            st.warning(f"⚠️ {f.name} không trích xuất được text")
 
 # =============================
-# SECTION 2 – TEMPLATE
+# GENERATE
 # =============================
-st.header("② Khung ma trận mẫu")
-
-default_template = (
-    "STT, Nội dung kiến thức, Đơn vị kiến thức, "
-    "Chuẩn cần đánh giá, Nhận biết, Thông hiểu, "
-    "Vận dụng, Vận dụng cao, Tổng số câu, Ghi chú"
-)
-
-template_text = st.text_area(
-    "Khung cột ma trận",
-    value=default_template,
-    height=150
-)
-
-# =============================
-# SECTION 3 – GENERATE MATRIX
-# =============================
-st.header("③ Tạo ma trận bằng AI")
-
-if st.button("🚀 TẠO MA TRẬN ĐẶC TẢ", use_container_width=True):
+if st.button("🚀 TẠO MA TRẬN"):
 
     if not reference_contents and not ref_text.strip():
-        st.error("❌ Chưa có dữ liệu tham chiếu")
+        st.error("❌ Chưa có dữ liệu")
         st.stop()
 
-    with st.spinner("GPT-4.1 đang phân tích dữ liệu và tạo ma trận..."):
+    prompt = f"""
+Bạn là chuyên gia khảo thí.
 
-        system_prompt = """
-Bạn là CHUYÊN GIA KHẢO THÍ.
+TRẢ VỀ JSON DUY NHẤT:
 
-QUY TẮC BẮT BUỘC:
-- Chỉ trả về JSON
+{{
+  "headers": ["STT", "..."],
+  "rows": [
+    ["1", "..."]
+  ]
+}}
+
+QUY TẮC:
+- TẤT CẢ giá trị là STRING
 - Không markdown
 - Không giải thích
-- TẤT CẢ giá trị trong rows PHẢI LÀ STRING
-- Không number, không null
-"""
 
-        user_prompt = f"""
 === KHUNG MA TRẬN ===
 {template_text}
 
-=== DỮ LIỆU THAM CHIẾU (NHẬP TAY) ===
+=== DỮ LIỆU ===
 {ref_text}
 
-=== DỮ LIỆU THAM CHIẾU (FILE) ===
 {"".join(reference_contents)}
 """
 
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "matrix_spec",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "headers": {
+    with st.spinner("GPT-4.1 đang xử lý..."):
+        response = client.responses.create(
+            model=MODEL_NAME,
+            input=prompt,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "matrix",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "headers": {"type": "array", "items": {"type": "string"}},
+                            "rows": {
+                                "type": "array",
+                                "items": {
                                     "type": "array",
                                     "items": {"type": "string"}
-                                },
-                                "rows": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "array",
-                                        "items": {"type": "string"}
-                                    }
                                 }
-                            },
-                            "required": ["headers", "rows"]
-                        }
+                            }
+                        },
+                        "required": ["headers", "rows"]
                     }
-                },
-                temperature=0.2
-            )
+                }
+            }
+        )
 
-            result = json.loads(response.choices[0].message.content)
-            df = pd.DataFrame(result["rows"], columns=result["headers"])
+        result = json.loads(response.output_text)
+        df = pd.DataFrame(result["rows"], columns=result["headers"])
 
-            st.success("✅ Tạo ma trận đặc tả thành công")
-            st.dataframe(df, use_container_width=True)
+        st.success("✅ Tạo thành công")
+        st.dataframe(df, use_container_width=True)
 
-            csv = df.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                "⬇️ Tải file CSV",
-                csv,
-                "Ma_Tran_Dac_Ta.csv",
-                "text/csv"
-            )
-
-        except Exception as e:
-            st.error("❌ GPT-4.1 trả dữ liệu lỗi")
-            st.exception(e)
+        st.download_button(
+            "⬇️ Tải CSV",
+            df.to_csv(index=False).encode("utf-8-sig"),
+            "Ma_Tran_Dac_Ta.csv",
+            "text/csv"
+        )
