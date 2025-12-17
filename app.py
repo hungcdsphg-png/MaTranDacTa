@@ -47,15 +47,45 @@ def read_excel(file):
     df = pd.read_excel(file)
     return df.to_csv(index=False)
 
-def extract_text(file):
-    name = file.name.lower()
-    if name.endswith(".pdf"):
-        return read_pdf(file)
-    if name.endswith(".docx"):
-        return read_docx(file)
-    if name.endswith(".xlsx") or name.endswith(".xls"):
-        return read_excel(file)
-    return file.read().decode("utf-8", errors="ignore")
+from io import BytesIO
+
+def extract_text(uploaded_file):
+    # Đọc file thành bytes
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)  # reset con trỏ file
+
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".pdf"):
+        text = ""
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text += f"\n--- Trang {i+1} ---\n{page_text}"
+        return text.strip()
+
+    elif file_name.endswith(".docx"):
+        doc = docx.Document(BytesIO(file_bytes))
+        texts = []
+
+        for p in doc.paragraphs:
+            if p.text.strip():
+                texts.append(p.text)
+
+        # Đọc cả bảng trong Word
+        for table in doc.tables:
+            for row in table.rows:
+                texts.append(" | ".join(cell.text for cell in row.cells))
+
+        return "\n".join(texts).strip()
+
+    elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+        df = pd.read_excel(BytesIO(file_bytes))
+        return df.to_csv(index=False)
+
+    else:
+        return file_bytes.decode("utf-8", errors="ignore").strip()
 
 # =============================
 # UI – HEADER
@@ -81,15 +111,18 @@ ref_text = st.text_area(
     height=200
 )
 
-reference_contents = []
+text = extract_text(f)
 
-if ref_files:
-    with st.spinner("Đang đọc file..."):
-        for f in ref_files:
-            try:
-                reference_contents.append(
-                    f"\n=== FILE: {f.name} ===\n{extract_text(f)}"
-                )
+if not text or len(text) < 50:
+    st.warning(f"⚠️ File {f.name} không trích xuất được nội dung (PDF scan hoặc file rỗng)")
+else:
+    reference_contents.append(
+        f"\n=== FILE: {f.name} ===\n{text}"
+    )
+
+    # Kiểm tra nhanh nội dung đã đọc
+    with st.expander(f"📄 Xem trước nội dung {f.name}"):
+        st.text(text[:500])
             except Exception as e:
                 st.error(f"Lỗi đọc {f.name}: {e}")
 
