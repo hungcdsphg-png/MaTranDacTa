@@ -45,7 +45,7 @@ from io import BytesIO
 def extract_text(uploaded_file):
     # Đọc file thành bytes
     file_bytes = uploaded_file.read()
-    uploaded_file.seek(0)  # reset pointer
+    uploaded_file.seek(0)  # reset con trỏ file
 
     file_name = uploaded_file.name.lower()
 
@@ -79,6 +79,7 @@ def extract_text(uploaded_file):
 
     else:
         return file_bytes.decode("utf-8", errors="ignore").strip()
+
 
 # =========================
 # UI – HEADER
