@@ -1,6 +1,7 @@
-streamlit==1.30.0
-pandas==2.1.4
+streamlit
+python-docx
+pdfplumber
+pandas
 openpyxl
 python-dotenv
-google-generativeai
-PyMuPDF
+openai
