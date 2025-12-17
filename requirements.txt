@@ -1,7 +1,2 @@
 streamlit>=1.32.0
-pandas
-pdfplumber
-python-docx
-openpyxl
-python-dotenv
 openai>=1.12.0
