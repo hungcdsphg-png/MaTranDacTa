@@ -104,17 +104,18 @@ ref_text = st.text_area(
     height=200
 )
 
-reference_contents = []
+text = extract_text(f)
 
-if ref_files:
-    with st.spinner("Đang đọc file..."):
-        for f in ref_files:
-            try:
-                reference_contents.append(
-                    f"\n=== FILE: {f.name} ===\n" + extract_text(f)
-                )
-            except Exception as e:
-                st.error(f"Lỗi đọc {f.name}: {e}")
+if not text or len(text) < 50:
+    st.warning(f"⚠️ File {f.name} không trích xuất được nội dung (PDF scan hoặc file rỗng)")
+else:
+    reference_contents.append(
+        f"\n=== FILE: {f.name} ===\n{text}"
+    )
+
+    # DEBUG – xem trước 500 ký tự
+    with st.expander(f"📄 Xem trước nội dung {f.name}"):
+        st.text(text[:500])
 
 # =========================
 # SECTION 2 – TEMPLATE
