@@ -4,6 +4,7 @@ import pdfplumber
 import docx
 import os
 import json
+from io import BytesIO
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -16,47 +17,28 @@ st.set_page_config(
 )
 
 # =============================
-# LOAD ENV
+# LOAD ENV & OPENAI
 # =============================
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
-    st.error("❌ Chưa cấu hình OPENAI_API_KEY trong Secrets")
+    st.error("❌ Chưa cấu hình OPENAI_API_KEY trong Streamlit Secrets")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-MODEL_NAME = "gpt-4.1"   # Có thể đổi sang gpt-4o-mini để test
+MODEL_NAME = "gpt-4.1"  # Có thể đổi sang gpt-4o-mini để test nhanh
 
 # =============================
-# FILE READERS
+# FILE EXTRACT (FIX HOÀN TOÀN)
 # =============================
-def read_pdf(file):
-    text = ""
-    with pdfplumber.open(file) as pdf:
-        for i, page in enumerate(pdf.pages):
-            text += f"\n--- Trang {i+1} ---\n"
-            text += page.extract_text() or ""
-    return text
-
-def read_docx(file):
-    doc = docx.Document(file)
-    return "\n".join(p.text for p in doc.paragraphs)
-
-def read_excel(file):
-    df = pd.read_excel(file)
-    return df.to_csv(index=False)
-
-from io import BytesIO
-
 def extract_text(uploaded_file):
-    # Đọc file thành bytes
     file_bytes = uploaded_file.read()
     uploaded_file.seek(0)  # reset con trỏ file
+    name = uploaded_file.name.lower()
 
-    file_name = uploaded_file.name.lower()
-
-    if file_name.endswith(".pdf"):
+    # PDF
+    if name.endswith(".pdf"):
         text = ""
         with pdfplumber.open(BytesIO(file_bytes)) as pdf:
             for i, page in enumerate(pdf.pages):
@@ -65,7 +47,8 @@ def extract_text(uploaded_file):
                     text += f"\n--- Trang {i+1} ---\n{page_text}"
         return text.strip()
 
-    elif file_name.endswith(".docx"):
+    # WORD
+    elif name.endswith(".docx"):
         doc = docx.Document(BytesIO(file_bytes))
         texts = []
 
@@ -73,17 +56,19 @@ def extract_text(uploaded_file):
             if p.text.strip():
                 texts.append(p.text)
 
-        # Đọc cả bảng trong Word
+        # Đọc cả bảng
         for table in doc.tables:
             for row in table.rows:
                 texts.append(" | ".join(cell.text for cell in row.cells))
 
         return "\n".join(texts).strip()
 
-    elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+    # EXCEL
+    elif name.endswith(".xlsx") or name.endswith(".xls"):
         df = pd.read_excel(BytesIO(file_bytes))
         return df.to_csv(index=False)
 
+    # TEXT
     else:
         return file_bytes.decode("utf-8", errors="ignore").strip()
 
@@ -96,7 +81,7 @@ _Hỗ trợ xây dựng bảng đặc tả đề kiểm tra – chuẩn khảo t
 """)
 
 # =============================
-# SECTION 1 – DATA
+# SECTION 1 – REFERENCE DATA
 # =============================
 st.header("① Dữ liệu tham chiếu")
 
@@ -111,20 +96,30 @@ ref_text = st.text_area(
     height=200
 )
 
-text = extract_text(f)
+reference_contents = []
 
-if not text or len(text) < 50:
-    st.warning(f"⚠️ File {f.name} không trích xuất được nội dung (PDF scan hoặc file rỗng)")
-else:
-    reference_contents.append(
-        f"\n=== FILE: {f.name} ===\n{text}"
-    )
+if ref_files:
+    with st.spinner("Đang đọc và phân tích file..."):
+        for f in ref_files:
+            try:
+                text = extract_text(f)
 
-    # Kiểm tra nhanh nội dung đã đọc
-    with st.expander(f"📄 Xem trước nội dung {f.name}"):
-        st.text(text[:500])
+                if not text or len(text) < 50:
+                    st.warning(
+                        f"⚠️ File {f.name} không trích xuất được nội dung "
+                        "(PDF scan hoặc file rỗng)"
+                    )
+                else:
+                    reference_contents.append(
+                        f"\n=== FILE: {f.name} ===\n{text}"
+                    )
+
+                    # PREVIEW KIỂM CHỨNG
+                    with st.expander(f"📄 Xem trước nội dung {f.name}"):
+                        st.text(text[:800])
+
             except Exception as e:
-                st.error(f"Lỗi đọc {f.name}: {e}")
+                st.error(f"❌ Lỗi đọc {f.name}: {e}")
 
 # =============================
 # SECTION 2 – TEMPLATE
@@ -144,7 +139,7 @@ template_text = st.text_area(
 )
 
 # =============================
-# SECTION 3 – GENERATE
+# SECTION 3 – GENERATE MATRIX
 # =============================
 st.header("③ Tạo ma trận bằng AI")
 
@@ -154,7 +149,7 @@ if st.button("🚀 TẠO MA TRẬN ĐẶC TẢ", use_container_width=True):
         st.error("❌ Chưa có dữ liệu tham chiếu")
         st.stop()
 
-    with st.spinner("GPT-4.1 đang phân tích và tạo ma trận..."):
+    with st.spinner("GPT-4.1 đang phân tích dữ liệu và tạo ma trận..."):
 
         system_prompt = """
 Bạn là CHUYÊN GIA KHẢO THÍ.
@@ -171,9 +166,10 @@ QUY TẮC BẮT BUỘC:
 === KHUNG MA TRẬN ===
 {template_text}
 
-=== DỮ LIỆU THAM CHIẾU ===
+=== DỮ LIỆU THAM CHIẾU (NHẬP TAY) ===
 {ref_text}
 
+=== DỮ LIỆU THAM CHIẾU (FILE) ===
 {"".join(reference_contents)}
 """
 
@@ -213,7 +209,7 @@ QUY TẮC BẮT BUỘC:
             result = json.loads(response.choices[0].message.content)
             df = pd.DataFrame(result["rows"], columns=result["headers"])
 
-            st.success("✅ Tạo ma trận thành công")
+            st.success("✅ Tạo ma trận đặc tả thành công")
             st.dataframe(df, use_container_width=True)
 
             csv = df.to_csv(index=False).encode("utf-8-sig")
@@ -225,5 +221,5 @@ QUY TẮC BẮT BUỘC:
             )
 
         except Exception as e:
-            st.error("❌ Lỗi khi gọi GPT-4.1")
+            st.error("❌ GPT-4.1 trả dữ liệu lỗi")
             st.exception(e)
