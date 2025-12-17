@@ -40,16 +40,45 @@ def read_excel(file):
     df = pd.read_excel(file)
     return df.to_csv(index=False)
 
-def extract_text(file):
-    name = file.name.lower()
-    if name.endswith(".pdf"):
-        return read_pdf(file)
-    elif name.endswith(".docx"):
-        return read_docx(file)
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        return read_excel(file)
+from io import BytesIO
+
+def extract_text(uploaded_file):
+    # Đọc file thành bytes
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)  # reset pointer
+
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".pdf"):
+        text = ""
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+            for i, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text += f"\n--- Trang {i+1} ---\n{page_text}"
+        return text.strip()
+
+    elif file_name.endswith(".docx"):
+        doc = docx.Document(BytesIO(file_bytes))
+        texts = []
+
+        for p in doc.paragraphs:
+            if p.text.strip():
+                texts.append(p.text)
+
+        # Đọc cả bảng trong Word
+        for table in doc.tables:
+            for row in table.rows:
+                texts.append(" | ".join(cell.text for cell in row.cells))
+
+        return "\n".join(texts).strip()
+
+    elif file_name.endswith(".xlsx") or file_name.endswith(".xls"):
+        df = pd.read_excel(BytesIO(file_bytes))
+        return df.to_csv(index=False)
+
     else:
-        return file.read().decode("utf-8", errors="ignore")
+        return file_bytes.decode("utf-8", errors="ignore").strip()
 
 # =========================
 # UI – HEADER
